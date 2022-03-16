@@ -2,12 +2,15 @@ const fs = require('fs');
 const utils = require('./utils');
 const dhive = require('@hiveio/dhive');
 const HiveEngine = require('./hive-engine');
+
 class Hive {
 	clients = [];
 	tx_queue = [];
 	last_block = 0;
 	last_vop_block = 0;
 	chain_props = null;
+	first_run = true;
+	unprocessed_blocks = [];
 	_options = {
 		logging_level: 3,
 		rpc_error_limit: 10,
@@ -28,6 +31,10 @@ class Hive {
 		this.clients[0].disabled = true;
 
 		setInterval(() => { this.processTxQueue(); }, 1000);
+	}
+
+	toggleFirstRun () {
+		this.first_run = !this.first_run
 	}
 
 	getNodeList() {
@@ -295,40 +302,65 @@ class Hive {
           this._options.on_behind_blocks(cur_block_num - this.last_block);
       }
 
-		while(cur_block_num > this.last_block) {
-			if(this._options.replay_batch_size && this._options.replay_batch_size > 1) {
-				const _first_upcoming_block = this.last_block + 1;
-				const promises = []
-				for (let i=0; i<this._options.replay_batch_size; i++ ) {
-					const consecutive_block = _first_upcoming_block + i;
-					if (consecutive_block > cur_block_num) {
-						break;
+    	let blocks = [];
+
+			while(cur_block_num > this.last_block) {
+	      result = await this.api('get_dynamic_global_properties');
+
+	      if(!result) {
+	        setTimeout(() => this.getNextBlock(), 1000);
+	        return;
+	      }
+
+	      cur_block_num = this._options.irreversible ? result.last_irreversible_block_num : (result.head_block_number - (this._options.blocks_behind_head || 0));
+
+				if(this._options.replay_batch_size && this._options.replay_batch_size > 1) {
+					const _first_upcoming_block = this.last_block + 1;
+					if (this.first_run) {
+						console.log("*** first run ***")
+						blocks = await this.fetchBlocks(_first_upcoming_block, cur_block_num);
+						this.toggleFirstRun()
 					}
-					promises.push(this.api('get_block', [consecutive_block]));
-				}
-				const blocks = await Promise.all(promises);
-				for (const block of blocks) {
-					if (!block || !block.transactions) {
-						utils.log('Error loading block batch that contains [' + block_num + ']', 4);
-						await utils.timeout(1000);
-						return;
-					}
-					await this.processBlockHelper(block, this.last_block + 1, cur_block_num);
-					if(this._options.on_virtual_op) {
+					
+					await this.processBlocks(await blocks, cur_block_num);
+					blocks = this.fetchBlocks(_first_upcoming_block + this._options.replay_batch_size, cur_block_num);
+				} else {
+					// If we have a new block, process it
+					await this.processBlock(this.last_block + 1, cur_block_num);
+					if(this._options.on_virtual_op)
 						await this.getVirtualOps(result.last_irreversible_block_num);
-					}
 				}
-			} else {
-				// If we have a new block, process it
-				await this.processBlock(this.last_block + 1, cur_block_num);
-				if(this._options.on_virtual_op)
-					await this.getVirtualOps(result.last_irreversible_block_num);
 			}
-		}
     } catch (err) { utils.log(`Error getting next block: ${err}`, 1, 'Red'); }
 
 		// Attempt to load the next block after a 1 second delay (or faster if we're behind and need to catch up)
 		setTimeout(() => this.getNextBlock(), 1000);
+	}
+
+	async fetchBlocks (_first_upcoming_block, cur_block_num) {
+		const promises = [];
+		for (let i=0; i < this._options.replay_batch_size; i++ ) {
+			const consecutive_block = _first_upcoming_block + i;
+			if (consecutive_block > cur_block_num) {
+				break;
+			}
+			promises.push(this.api('get_block', [consecutive_block]));
+		}
+		return await Promise.all(promises);
+	}
+
+	async processBlocks (blocks, cur_block_num) {
+		for (const block of blocks) {
+			if (!block || !block.transactions) {
+				utils.log('Error loading block batch that contains [' + block_num + ']', 4);
+				await utils.timeout(1000);
+				return;
+			}
+			await this.processBlockHelper(block, this.last_block + 1, cur_block_num);
+			if(this._options.on_virtual_op) {
+				await this.getVirtualOps(result.last_irreversible_block_num);
+			}
+		}
 	}
 
 	async getVirtualOps(last_irreversible_block_num) {
@@ -363,6 +395,8 @@ class Hive {
 		// Log every 1000th block loaded just for easy parsing of logs, or every block depending on logging level
 		utils.log(`Processing block [${block_num}], Head Block: ${cur_block_num}, Blocks to head: ${cur_block_num - block_num}`, block_num % 1000 == 0 ? 1 : 4);
 
+		this.last_block = block_num;
+
 		if(!block || !block.transactions) {
 			// Block couldn't be loaded...this is typically because it hasn't been created yet
 			utils.log('Error loading block [' + block_num + ']', 4);
@@ -389,8 +423,6 @@ class Hive {
 				}
 			}
 		}
-
-		this.last_block = block_num;
 
 		if(this._options.save_state)
 			this._options.save_state({ last_block: this.last_block, last_vop_block: this.last_vop_block });

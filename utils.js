@@ -59,10 +59,20 @@ function isTxError(err) {
 	return (err && err.name == 'RPCError' && err.jse_info && err.jse_info.code != 4030200 && ([10, 13].includes(err.jse_info.code) || err.jse_info.code > 1000000));
 }
 
+function wait(ms = 1000, block_num) {
+	return new Promise((resolve, reject) => {
+		setTimeout(() => {
+			console.log(`Done waiting for block #${block_num} event handlers`);
+			resolve();
+		}, ms);
+	});
+}
+
 module.exports = {
 	set_options,
 	log,
 	timeout,
 	tryParse,
-	isTxError
+	isTxError,
+	 wait
 }
