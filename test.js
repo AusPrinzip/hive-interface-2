@@ -15,7 +15,7 @@ let he_client = new HiveEngine();
 async function onBlock(block_num, block, head_block) {
 	console.log(`Received Hive block: ${block_num} - ${block.transactions.length}, Head Block: ${head_block}`);
 	const randomTime = Math.random() * 2000;
-	await utils.wait(randomTime);
+	await utils.wait(randomTime, block_num);
 }
 
 function onOperation(op, block_num, block_id, previous, transaction_id, block_time) {
