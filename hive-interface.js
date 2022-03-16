@@ -321,9 +321,8 @@ class Hive {
 						blocks = await this.fetchBlocks(_first_upcoming_block, cur_block_num);
 						this.toggleFirstRun()
 					}
-					
 					await this.processBlocks(await blocks, cur_block_num);
-					blocks = this.fetchBlocks(_first_upcoming_block + this._options.replay_batch_size, cur_block_num);
+					blocks = this.fetchBlocks(_first_upcoming_block, cur_block_num);
 				} else {
 					// If we have a new block, process it
 					await this.processBlock(this.last_block + 1, cur_block_num);
